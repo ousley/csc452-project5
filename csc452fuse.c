@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <ctype.h>
+#include <unistd.h>
 
 static const char *diskpath = ".disk";
 
@@ -91,16 +92,33 @@ typedef struct csc452_disk_block csc452_disk_block;
  */
 static int csc452_getattr(const char *path, struct stat *stbuf)
 {
+	printf("getattr called on %s\n", path);
 	int res = 0;
+
+	stbuf->st_uid = getuid();
+	stbuf->st_gid = getgid();
+	stbuf->st_atime = time(NULL);
+	stbuf->st_mtime = time(NULL);
 
 	if (strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
 		stbuf->st_nlink = 2;
-	} else  {
+	} else {
 		
-		//If the path does exist and is a directory:
-		//stbuf->st_mode = S_IFDIR | 0755;
-		//stbuf->st_nlink = 2;
+		csc452_root_directory rd;
+		FILE *disk = fopen(diskpath, "r+b");
+		if (!disk)
+			return -EFAULT;
+		fread(&rd, sizeof(csc452_root_directory), 1, disk);
+
+		for (int i = 0; i < rd.nDirectories; i++) {
+			//If the path does exist and is a directory:
+			if (strncmp(path, rd.directories[i].dname, MAX_FILENAME) == 0) {
+				stbuf->st_mode = S_IFDIR | 0755;
+				stbuf->st_nlink = 2;
+				return res;
+			}
+		}
 
 		//If the path does exist and is a file:
 		//stbuf->st_mode = S_IFREG | 0666;
@@ -109,7 +127,6 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 		
 		//Else return that path doesn't exist
 		res = -ENOENT;
-
 	}
 
 	return res;
@@ -150,25 +167,32 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
  */
 static int csc452_mkdir(const char *path, mode_t mode)
 {
+	printf("*** mkdir %s\n", path);
 	(void) mode;
 
-	if (strlen(path) > MAX_FILENAME)
+	if (strlen(path) > MAX_FILENAME + 1)
 		return -ENAMETOOLONG;
 
 	csc452_root_directory rd;
-	FILE *disk = fopen(diskpath, "rwb");
+	FILE *disk = fopen(diskpath, "r+b");
+	if (!disk)
+		return -EFAULT;
 	fread(&rd, sizeof(csc452_root_directory), 1, disk);
+	printf("*** read root dir\n");
 	//check whether we can make more directories
-	if (rd.nDirectories >= MAX_DIRS_IN_ROOT)
+	if (rd.nDirectories >= MAX_DIRS_IN_ROOT) {
+		fclose(disk);
 		return -ENOSPC;
+	}
 	//check whether directory already exists
-	//FIXME
 	for (int i = 0; i < rd.nDirectories; i++) {
-		if (strncmp(rd.directories[i].dname, path, MAX_FILENAME) == 0)
+		if (strncmp(rd.directories[i].dname, path, MAX_FILENAME) == 0) {
+			fclose(disk);
 			return -EEXIST;
+		}
 	}
 
-	//ensure directory is in root
+	//ensure directory is in root (enforce two-level tree)
 	//TODO
 
 	//TODO: block start position should be arbitrary (they can be discontiguous)
@@ -183,6 +207,7 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	strncpy(rd.directories[rd.nDirectories].dname, path, MAX_FILENAME);
 	rd.directories[rd.nDirectories].nStartBlock = startBlk;
 	rd.nDirectories++;
+	printf("*** creating dir\n");
 
 	//write back to disk
 	rewind(disk);
@@ -191,6 +216,7 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	fseek(disk, startBlk, SEEK_SET);
 	fwrite(&dir_e, sizeof(csc452_directory_entry), 1, disk);
 	fclose(disk);
+	printf("*** wrote and closed disk\n");
 
 	return 0;
 }
