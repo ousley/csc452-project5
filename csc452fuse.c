@@ -18,6 +18,8 @@
 #include <dirent.h>
 #include <ctype.h>
 
+static const char *diskpath = ".disk";
+
 //size of a disk block
 #define	BLOCK_SIZE 512
 
@@ -148,8 +150,47 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
  */
 static int csc452_mkdir(const char *path, mode_t mode)
 {
-	(void) path;
 	(void) mode;
+
+	if (strlen(path) > MAX_FILENAME)
+		return -ENAMETOOLONG;
+
+	csc452_root_directory rd;
+	FILE *disk = fopen(diskpath, "rwb");
+	fread(&rd, sizeof(csc452_root_directory), 1, disk);
+	//check whether we can make more directories
+	if (rd.nDirectories >= MAX_DIRS_IN_ROOT)
+		return -ENOSPC;
+	//check whether directory already exists
+	//FIXME
+	for (int i = 0; i < rd.nDirectories; i++) {
+		if (strncmp(rd.directories[i].dname, path, MAX_FILENAME) == 0)
+			return -EEXIST;
+	}
+
+	//ensure directory is in root
+	//TODO
+
+	//TODO: block start position should be arbitrary (they can be discontiguous)
+	long startBlk = rd.nDirectories * BLOCK_SIZE + 1;
+
+	//create the directory
+	csc452_directory_entry dir_e = {
+		.nFiles = 0
+	};
+
+	//update directory list in root
+	strncpy(rd.directories[rd.nDirectories].dname, path, MAX_FILENAME);
+	rd.directories[rd.nDirectories].nStartBlock = startBlk;
+	rd.nDirectories++;
+
+	//write back to disk
+	rewind(disk);
+	fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
+	//(not sure if necessary, just writes 0 files to contents)
+	fseek(disk, startBlk, SEEK_SET);
+	fwrite(&dir_e, sizeof(csc452_directory_entry), 1, disk);
+	fclose(disk);
 
 	return 0;
 }
