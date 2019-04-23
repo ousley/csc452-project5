@@ -92,7 +92,6 @@ typedef struct csc452_disk_block csc452_disk_block;
  */
 static int csc452_getattr(const char *path, struct stat *stbuf)
 {
-	printf("getattr called on %s\n", path);
 	int res = 0;
 
 	stbuf->st_uid = getuid();
@@ -146,16 +145,25 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) offset;
 	(void) fi;
 
+	csc452_root_directory rd;
+	FILE *disk = fopen(diskpath, "r+b");
+	if (!disk)
+		return -EFAULT;
+	fread(&rd, sizeof(csc452_root_directory), 1, disk);
+
 	//A directory holds two entries, one that represents itself (.) 
 	//and one that represents the directory above us (..)
 	if (strcmp(path, "/") != 0) {
 		filler(buf, ".", NULL,0);
 		filler(buf, "..", NULL, 0);
+		//TODO: list files in subdirectories
 	}
 	else {
-		// All we have _right now_ is root (/), so any other path must
-		// not exist. 
-		return -ENOENT;
+		//return -ENOENT;
+		//FIXME
+		for (int i = 0; i < rd.nDirectories; i++) {
+			filler(buf, rd.directories[i].dname, NULL, 0);
+		}
 	}
 
 	return 0;
@@ -167,7 +175,6 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
  */
 static int csc452_mkdir(const char *path, mode_t mode)
 {
-	printf("*** mkdir %s\n", path);
 	(void) mode;
 
 	if (strlen(path) > MAX_FILENAME + 1)
@@ -178,7 +185,6 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	if (!disk)
 		return -EFAULT;
 	fread(&rd, sizeof(csc452_root_directory), 1, disk);
-	printf("*** read root dir\n");
 	//check whether we can make more directories
 	if (rd.nDirectories >= MAX_DIRS_IN_ROOT) {
 		fclose(disk);
@@ -196,7 +202,7 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	//TODO
 
 	//TODO: block start position should be arbitrary (they can be discontiguous)
-	long startBlk = rd.nDirectories * BLOCK_SIZE + 1;
+	long startBlk = rd.nDirectories + 1;
 
 	//create the directory
 	csc452_directory_entry dir_e = {
@@ -204,19 +210,17 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	};
 
 	//update directory list in root
-	strncpy(rd.directories[rd.nDirectories].dname, path, MAX_FILENAME);
+	strncpy(rd.directories[rd.nDirectories].dname, path, MAX_FILENAME + 1);
 	rd.directories[rd.nDirectories].nStartBlock = startBlk;
 	rd.nDirectories++;
-	printf("*** creating dir\n");
 
 	//write back to disk
 	rewind(disk);
 	fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
 	//(not sure if necessary, just writes 0 files to contents)
-	fseek(disk, startBlk, SEEK_SET);
+	fseek(disk, startBlk * BLOCK_SIZE, SEEK_SET);
 	fwrite(&dir_e, sizeof(csc452_directory_entry), 1, disk);
 	fclose(disk);
-	printf("*** wrote and closed disk\n");
 
 	return 0;
 }
