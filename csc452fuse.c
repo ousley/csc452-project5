@@ -94,10 +94,10 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 {
 	int res = 0;
 
-	stbuf->st_uid = getuid();
-	stbuf->st_gid = getgid();
-	stbuf->st_atime = time(NULL);
-	stbuf->st_mtime = time(NULL);
+	//stbuf->st_uid = getuid();
+	//stbuf->st_gid = getgid();
+	//stbuf->st_atime = time(NULL);
+	//stbuf->st_mtime = time(NULL);
 
 	if (strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
@@ -115,6 +115,7 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 			if (strncmp(path, rd.directories[i].dname, MAX_FILENAME) == 0) {
 				stbuf->st_mode = S_IFDIR | 0755;
 				stbuf->st_nlink = 2;
+				fclose(disk);
 				return res;
 			}
 		}
@@ -125,6 +126,7 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 		//stbuf->st_size = file size
 		
 		//Else return that path doesn't exist
+		fclose(disk);
 		res = -ENOENT;
 	}
 
@@ -142,14 +144,15 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	//Since we're building with -Wall (all warnings reported) we need
 	//to "use" every parameter, so let's just cast them to void to
 	//satisfy the compiler
-	(void) offset;
+	//(void) offset;
 	(void) fi;
 
 	csc452_root_directory rd;
-	FILE *disk = fopen(diskpath, "r+b");
+	FILE *disk = fopen(diskpath, "rb");
 	if (!disk)
 		return -EFAULT;
 	fread(&rd, sizeof(csc452_root_directory), 1, disk);
+	fclose(disk);
 
 	//A directory holds two entries, one that represents itself (.) 
 	//and one that represents the directory above us (..)
@@ -163,9 +166,12 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	else {
 		printf("*** it IS root\n");
 		//FIXME
+		filler(buf, ".", NULL,0);
+		filler(buf, "..", NULL, 0);
 		for (int i = 0; i < rd.nDirectories; i++) {
 			printf("*** filler %s\n", rd.directories[i].dname);
-			filler(buf, rd.directories[i].dname, NULL, 0);
+			char *dirname = strtok(rd.directories[i].dname, "/");
+			filler(buf, dirname, NULL, 0);
 		}
 	}
 
@@ -205,6 +211,8 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	//TODO
 
 	//TODO: block start position should be arbitrary (they can be discontiguous)
+	//This will break as soon as at least one directory is removed - future
+	//directory entries will be written over old ones (use free space tracking)
 	long startBlk = rd.nDirectories + 1;
 
 	//create the directory
@@ -217,11 +225,21 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	rd.directories[rd.nDirectories].nStartBlock = startBlk;
 	rd.nDirectories++;
 
+
+	//XXX repacking directory array after removing a directory (rmdir)
+	/*
+	if (n < rd.nDirectories-1)
+		rd.directories[n] = rd.directories[rd.nDirectories-1];
+	rd.nDirectories--;
+	*/
+
+
 	//write back to disk
 	rewind(disk);
 	fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
 	fseek(disk, startBlk * BLOCK_SIZE, SEEK_SET);
 	fwrite(&dir_e, sizeof(csc452_directory_entry), 1, disk);
+	//TODO: wite to free space tracking
 	fclose(disk);
 
 	return 0;
@@ -292,9 +310,42 @@ static int csc452_write(const char *path, const char *buf, size_t size,
  */
 static int csc452_rmdir(const char *path)
 {
-	  (void) path;
+	(void) path;
+	  
+	int found = 0;
 
-	  return 0;
+	csc452_root_directory rd;
+	FILE *disk = fopen(diskpath, "r+b");
+	if (!disk)
+		return -EFAULT;
+	fread(&rd, sizeof(csc452_root_directory), 1, disk);
+
+	for (int i = 0; i < rd.nDirectories; i++) {
+		if (strncmp(rd.directories[i].dname, path, MAX_FILENAME) == 0) {
+			printf("*** found directory to remove - %d\n", i);
+			if (i < rd.nDirectories - 1) {
+				printf("*** need to repack directory list\n");
+				rd.directories[i] = rd.directories[rd.nDirectories - 1];
+			}
+			rd.nDirectories--;
+			found = 1;
+			break;
+		}
+	}
+
+	if (found) {
+		//write back to disk
+		rewind(disk);
+		fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
+		//TODO: write to free space tracking
+		fclose(disk);
+	}
+	else {
+		fclose(disk);
+		return -ENOENT;
+	}
+
+	return 0;
 }
 
 /*
