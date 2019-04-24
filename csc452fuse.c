@@ -153,15 +153,18 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 	//A directory holds two entries, one that represents itself (.) 
 	//and one that represents the directory above us (..)
+	printf("*** checking if it's root\n");
 	if (strcmp(path, "/") != 0) {
+		printf("*** it isn't root\n");
 		filler(buf, ".", NULL,0);
 		filler(buf, "..", NULL, 0);
 		//TODO: list files in subdirectories
 	}
 	else {
-		//return -ENOENT;
+		printf("*** it IS root\n");
 		//FIXME
 		for (int i = 0; i < rd.nDirectories; i++) {
+			printf("*** filler %s\n", rd.directories[i].dname);
 			filler(buf, rd.directories[i].dname, NULL, 0);
 		}
 	}
@@ -217,7 +220,6 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	//write back to disk
 	rewind(disk);
 	fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
-	//(not sure if necessary, just writes 0 files to contents)
 	fseek(disk, startBlk * BLOCK_SIZE, SEEK_SET);
 	fwrite(&dir_e, sizeof(csc452_directory_entry), 1, disk);
 	fclose(disk);
