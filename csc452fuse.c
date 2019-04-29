@@ -83,6 +83,12 @@ struct csc452_disk_block
 
 typedef struct csc452_disk_block csc452_disk_block;
 
+struct csc452_space_tracking
+{
+};
+
+typedef struct csc452_space_tracking csc452_space_tracking;
+
 
 /*
  * Called whenever the system wants to know the file attributes, including
@@ -109,9 +115,15 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 			return -EFAULT;
 		fread(&rd, sizeof(csc452_root_directory), 1, disk);
 
+		//break path into dir/fn/ext
+		char directory[MAX_FILENAME+1] = "\0";
+		char filename[MAX_FILENAME+1] = "\0";
+		char extension[MAX_EXTENSION+1] = "\0";
+		sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+
 		for (int i = 0; i < rd.nDirectories; i++) {
 			//If the path does exist and is a directory:
-			if (strncmp(path, rd.directories[i].dname, MAX_FILENAME) == 0) {
+			if (strncmp(directory, strtok(rd.directories[i].dname, "/"), MAX_FILENAME) == 0) {
 				stbuf->st_mode = S_IFDIR | 0755;
 				stbuf->st_nlink = 2;
 				fclose(disk);
@@ -166,8 +178,9 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		//disregard last two params because we don't care about file attributes
 		//and we're not doing weird things with string offsets(?)
 		for (int i = 0; i < rd.nDirectories; i++) {
-			char *dirname = strtok(rd.directories[i].dname, "/");
-			filler(buf, dirname, NULL, 0);
+			//FIXME
+			//char *dirname = strtok(rd.directories[i].dname, "/");
+			filler(buf, rd.directories[i].dname, NULL, 0);
 		}
 	}
 
@@ -197,7 +210,7 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	}
 	//check whether directory already exists
 	for (int i = 0; i < rd.nDirectories; i++) {
-		if (strncmp(rd.directories[i].dname, path, MAX_FILENAME) == 0) {
+		if (strncmp(rd.directories[i].dname, strtok((char *)path, "/"), MAX_FILENAME) == 0) {
 			fclose(disk);
 			return -EEXIST;
 		}
@@ -217,7 +230,7 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	};
 
 	//update directory list in root
-	strncpy(rd.directories[rd.nDirectories].dname, path, MAX_FILENAME + 1);
+	strncpy(rd.directories[rd.nDirectories].dname, strtok((char *)path, "/"), MAX_FILENAME + 1);
 	rd.directories[rd.nDirectories].nStartBlock = startBlk;
 	rd.nDirectories++;
 
@@ -305,7 +318,7 @@ static int csc452_rmdir(const char *path)
 	fread(&rd, sizeof(csc452_root_directory), 1, disk);
 	//find the directory
 	for (int i = 0; i < rd.nDirectories; i++) {
-		if (strncmp(rd.directories[i].dname, path, MAX_FILENAME) == 0) {
+		if (strncmp(rd.directories[i].dname, strtok((char *)path, "/"), MAX_FILENAME) == 0) {
 			//remove from dir list, ensuring array is packed
 			if (i < rd.nDirectories - 1)
 				rd.directories[i] = rd.directories[rd.nDirectories - 1];
