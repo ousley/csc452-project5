@@ -103,7 +103,6 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 		stbuf->st_mode = S_IFDIR | 0755;
 		stbuf->st_nlink = 2;
 	} else {
-		
 		csc452_root_directory rd;
 		FILE *disk = fopen(diskpath, "r+b");
 		if (!disk)
@@ -140,7 +139,6 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			 off_t offset, struct fuse_file_info *fi)
 {
-
 	//Since we're building with -Wall (all warnings reported) we need
 	//to "use" every parameter, so let's just cast them to void to
 	//satisfy the compiler
@@ -156,20 +154,18 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 	//A directory holds two entries, one that represents itself (.) 
 	//and one that represents the directory above us (..)
-	printf("*** checking if it's root\n");
 	if (strcmp(path, "/") != 0) {
-		printf("*** it isn't root\n");
 		filler(buf, ".", NULL,0);
 		filler(buf, "..", NULL, 0);
 		//TODO: list files in subdirectories
 	}
 	else {
-		printf("*** it IS root\n");
-		//FIXME
 		filler(buf, ".", NULL,0);
 		filler(buf, "..", NULL, 0);
+		//read each subdirectory into buffer
+		//disregard last two params because we don't care about file attributes
+		//and we're not doing weird things with string offsets(?)
 		for (int i = 0; i < rd.nDirectories; i++) {
-			printf("*** filler %s\n", rd.directories[i].dname);
 			char *dirname = strtok(rd.directories[i].dname, "/");
 			filler(buf, dirname, NULL, 0);
 		}
@@ -225,15 +221,6 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	rd.directories[rd.nDirectories].nStartBlock = startBlk;
 	rd.nDirectories++;
 
-
-	//XXX repacking directory array after removing a directory (rmdir)
-	/*
-	if (n < rd.nDirectories-1)
-		rd.directories[n] = rd.directories[rd.nDirectories-1];
-	rd.nDirectories--;
-	*/
-
-
 	//write back to disk
 	rewind(disk);
 	fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
@@ -251,7 +238,6 @@ static int csc452_mkdir(const char *path, mode_t mode)
  * Note that the mknod shell command is not the one to test this.
  * mknod at the shell is used to create "special" files and we are
  * only supporting regular files.
- *
  */
 static int csc452_mknod(const char *path, mode_t mode, dev_t dev)
 {
@@ -264,7 +250,6 @@ static int csc452_mknod(const char *path, mode_t mode, dev_t dev)
 
 /*
  * Read size bytes from file into buf starting from offset
- *
  */
 static int csc452_read(const char *path, char *buf, size_t size, off_t offset,
 			  struct fuse_file_info *fi)
@@ -285,7 +270,6 @@ static int csc452_read(const char *path, char *buf, size_t size, off_t offset,
 
 /*
  * Write size bytes from buf into file starting from offset
- *
  */
 static int csc452_write(const char *path, const char *buf, size_t size,
 			  off_t offset, struct fuse_file_info *fi)
@@ -306,12 +290,12 @@ static int csc452_write(const char *path, const char *buf, size_t size,
 
 /*
  * Removes a directory (must be empty)
- *
  */
 static int csc452_rmdir(const char *path)
 {
 	(void) path;
-	  
+
+	int ret = 0;
 	int found = 0;
 
 	csc452_root_directory rd;
@@ -319,14 +303,12 @@ static int csc452_rmdir(const char *path)
 	if (!disk)
 		return -EFAULT;
 	fread(&rd, sizeof(csc452_root_directory), 1, disk);
-
+	//find the directory
 	for (int i = 0; i < rd.nDirectories; i++) {
 		if (strncmp(rd.directories[i].dname, path, MAX_FILENAME) == 0) {
-			printf("*** found directory to remove - %d\n", i);
-			if (i < rd.nDirectories - 1) {
-				printf("*** need to repack directory list\n");
+			//remove from dir list, ensuring array is packed
+			if (i < rd.nDirectories - 1)
 				rd.directories[i] = rd.directories[rd.nDirectories - 1];
-			}
 			rd.nDirectories--;
 			found = 1;
 			break;
@@ -338,19 +320,17 @@ static int csc452_rmdir(const char *path)
 		rewind(disk);
 		fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
 		//TODO: write to free space tracking
-		fclose(disk);
 	}
-	else {
-		fclose(disk);
-		return -ENOENT;
-	}
+	//not found
+	else
+		ret = -ENOENT;
 
-	return 0;
+	fclose(disk);
+	return ret;
 }
 
 /*
  * Removes a file.
- *
  */
 static int csc452_unlink(const char *path)
 {
