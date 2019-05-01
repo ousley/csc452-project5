@@ -31,8 +31,17 @@ static const char *diskpath = ".disk";
 //How many files can there be in one directory?
 #define MAX_FILES_IN_DIR (BLOCK_SIZE - sizeof(int)) / ((MAX_FILENAME + 1) + (MAX_EXTENSION + 1) + sizeof(size_t) + sizeof(long))
 
-//The attribute packed means to not align these things
-struct csc452_directory_entry
+typedef struct
+{
+	//whether this run of blocks is allocated or unallocated
+	unsigned char isAllocated;
+	//length of this run
+	unsigned int length;
+	//ptr to next run
+	struct csc452_allocation_node *next;
+} __attribute__((packed)) csc452_allocation_node;
+
+typedef struct
 {
 	int nFiles;	//How many files are in this directory.
 				//Needs to be less than MAX_FILES_IN_DIR
@@ -48,13 +57,11 @@ struct csc452_directory_entry
 	//This is some space to get this to be exactly the size of the disk block.
 	//Don't use it for anything.  
 	char padding[BLOCK_SIZE - MAX_FILES_IN_DIR * sizeof(struct csc452_file_directory) - sizeof(int)];
-} ;
-
-typedef struct csc452_root_directory csc452_root_directory;
+} csc452_directory_entry;
 
 #define MAX_DIRS_IN_ROOT (BLOCK_SIZE - sizeof(int)) / ((MAX_FILENAME + 1) + sizeof(long))
 
-struct csc452_root_directory
+typedef struct
 {
 	int nDirectories;	//How many subdirectories are in the root
 						//Needs to be less than MAX_DIRS_IN_ROOT
@@ -63,32 +70,85 @@ struct csc452_root_directory
 		char dname[MAX_FILENAME + 1];	//directory name (plus space for nul)
 		long nStartBlock;				//where the directory block is on disk
 	} __attribute__((packed)) directories[MAX_DIRS_IN_ROOT];	//There is an array of these
+	csc452_allocation_node *allocation;
 
 	//This is some space to get this to be exactly the size of the disk block.
 	//Don't use it for anything.  
-	char padding[BLOCK_SIZE - MAX_DIRS_IN_ROOT * sizeof(struct csc452_directory) - sizeof(int)];
-} ;
-
-typedef struct csc452_directory_entry csc452_directory_entry;
+	char padding[BLOCK_SIZE
+		- MAX_DIRS_IN_ROOT * sizeof(struct csc452_directory)
+		- sizeof(int)];
+} csc452_root_directory;
 
 //How much data can one block hold?
 #define	MAX_DATA_IN_BLOCK (BLOCK_SIZE)
 
-struct csc452_disk_block
+typedef struct
 {
 	//All of the space in the block can be used for actual data
 	//storage.
 	char data[MAX_DATA_IN_BLOCK];
-};
+} csc452_disk_block;
 
-typedef struct csc452_disk_block csc452_disk_block;
-
-struct csc452_space_tracking
+//read block allocation data from the end of the disk and load it into a linked
+//list starting at *head
+void readAllocationData(FILE *disk, csc452_allocation_node *head)
 {
-};
+	if (!disk)
+		return;
+	//save position in file
+	fpos_t cur;
+	fgetpos(disk, &cur);
 
-typedef struct csc452_space_tracking csc452_space_tracking;
+	//TODO: space tracking should be arbitrarily sized (but its start position
+	//needs to be stored somewhere)
+	fseek(disk, BLOCK_SIZE, SEEK_END);
 
+	//new ptr so we don't move the original
+	csc452_allocation_node *n = head;
+
+	unsigned char a = 0;
+	unsigned int l = 0;
+	do {
+		fread(&a, sizeof(char), 1, disk);
+		fread(&l, sizeof(char), 1, disk);
+		if (l) {
+			//TODO
+		}
+	} while (l);
+
+	//go back to where we started
+	fsetpos(disk, &cur);
+}
+
+int writeAllocationData(FILE *disk, csc452_allocation_node *head)
+{
+	if (!disk)
+		return 1;
+	//save position in file
+	fpos_t cur;
+	fgetpos(disk, &cur);
+
+	//new ptr so we don't move the original
+	csc452_allocation_node *n = head;
+	while (n != NULL) {
+		if (!fwrite(&(n->isAllocated), sizeof(char), 1, disk))
+			return 1;
+		if (!fwrite(&(n->length), sizeof(int), 1, disk))
+			return 1;
+	}
+	//zero out rest of file
+	char zero = 0;
+	while (!feof(disk))
+		fwrite(&zero, sizeof(char), 1, disk);
+
+	//TODO: space tracking should be arbitrarily sized (but its start position
+	//needs to be stored somewhere)
+	fseek(disk, BLOCK_SIZE, SEEK_END);
+
+	//go back to where we started
+	fsetpos(disk, &cur);
+	return 0;
+}
 
 /*
  * Called whenever the system wants to know the file attributes, including
