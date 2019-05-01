@@ -33,16 +33,6 @@ static const char *diskpath = ".disk";
 
 typedef struct
 {
-	//whether this run of blocks is allocated or unallocated
-	unsigned char isAllocated;
-	//length of this run
-	unsigned int length;
-	//ptr to next run
-	struct csc452_allocation_node *next;
-} __attribute__((packed)) csc452_allocation_node;
-
-typedef struct
-{
 	int nFiles;	//How many files are in this directory.
 				//Needs to be less than MAX_FILES_IN_DIR
 
@@ -70,7 +60,6 @@ typedef struct
 		char dname[MAX_FILENAME + 1];	//directory name (plus space for nul)
 		long nStartBlock;				//where the directory block is on disk
 	} __attribute__((packed)) directories[MAX_DIRS_IN_ROOT];	//There is an array of these
-	csc452_allocation_node *allocation;
 
 	//This is some space to get this to be exactly the size of the disk block.
 	//Don't use it for anything.  
@@ -91,7 +80,36 @@ typedef struct
 
 //read block allocation data from the end of the disk and load it into a linked
 //list starting at *head
-void readAllocationData(FILE *disk, csc452_allocation_node *head)
+//return length of allocation bitmap
+unsigned long readAllocationData(FILE *disk, int *arr)
+{
+	if (!disk)
+		return 0;
+
+	//save position in file
+	fpos_t cur;
+	fgetpos(disk, &cur);
+
+	//get disk size
+	unsigned long diskSize;
+	fseek(disk, 0, SEEK_END);
+	diskSize = ftell(disk);
+	//get length of allocation bitmap (round up to nearest byte)
+	unsigned long allocLength = ((diskSize / BLOCK_SIZE) + 7) / 8;
+	//get offset from end where allocation data starts (round up to nearest block)
+	unsigned int allocOffset = (allocLength + BLOCK_SIZE - 1)/BLOCK_SIZE;
+
+	fseek(disk, allocOffset, SEEK_END);
+	arr = malloc(allocLength);
+	fread(arr, allocLength, 1, disk);
+
+	//go back to where we started
+	fsetpos(disk, &cur);
+
+	return allocLength;
+}
+
+void writeAllocationData(FILE *disk, int *arr, unsigned long allocLength)
 {
 	if (!disk)
 		return;
@@ -99,55 +117,14 @@ void readAllocationData(FILE *disk, csc452_allocation_node *head)
 	fpos_t cur;
 	fgetpos(disk, &cur);
 
-	//TODO: space tracking should be arbitrarily sized (but its start position
-	//needs to be stored somewhere)
-	fseek(disk, BLOCK_SIZE, SEEK_END);
+	//get offset from end where allocation data will go (round up to nearest block)
+	unsigned int allocOffset = (allocLength + BLOCK_SIZE - 1)/BLOCK_SIZE;
 
-	//new ptr so we don't move the original
-	csc452_allocation_node *n = head;
-
-	unsigned char a = 0;
-	unsigned int l = 0;
-	do {
-		fread(&a, sizeof(char), 1, disk);
-		fread(&l, sizeof(char), 1, disk);
-		if (l) {
-			//TODO
-		}
-	} while (l);
+	fseek(disk, allocOffset, SEEK_END);
+	fwrite(arr, allocLength, 1, disk);
 
 	//go back to where we started
 	fsetpos(disk, &cur);
-}
-
-int writeAllocationData(FILE *disk, csc452_allocation_node *head)
-{
-	if (!disk)
-		return 1;
-	//save position in file
-	fpos_t cur;
-	fgetpos(disk, &cur);
-
-	//new ptr so we don't move the original
-	csc452_allocation_node *n = head;
-	while (n != NULL) {
-		if (!fwrite(&(n->isAllocated), sizeof(char), 1, disk))
-			return 1;
-		if (!fwrite(&(n->length), sizeof(int), 1, disk))
-			return 1;
-	}
-	//zero out rest of file
-	char zero = 0;
-	while (!feof(disk))
-		fwrite(&zero, sizeof(char), 1, disk);
-
-	//TODO: space tracking should be arbitrarily sized (but its start position
-	//needs to be stored somewhere)
-	fseek(disk, BLOCK_SIZE, SEEK_END);
-
-	//go back to where we started
-	fsetpos(disk, &cur);
-	return 0;
 }
 
 /*
