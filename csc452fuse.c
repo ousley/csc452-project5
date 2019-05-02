@@ -139,6 +139,21 @@ int testBit(int *arr, int k) {
 	return ((arr[k/32] & (1 << (k % 32))) != 0);
 }
 
+FILE *load_rd(csc452_root_directory *root) {
+	FILE *fp = fopen(diskpath, "r+b");
+	if (!fp)
+		return (FILE *)0;
+	return fp;
+}
+
+FILE *load_dir(csc452_directory_entry *dir, long blk) {
+	FILE *fp = fopen(diskpath, "r+b");
+	if (!fp)
+		return (FILE *)0;
+	fseek(fp, blk * BLOCK_SIZE, SEEK_SET);
+	return fp;
+}
+
 /*
  * Called whenever the system wants to know the file attributes, including
  * simply whether the file exists or not.
@@ -170,20 +185,45 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 		char extension[MAX_EXTENSION+1] = "\0";
 		sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
 
+		long dirstart = 0;
 		for (int i = 0; i < rd.nDirectories; i++) {
-			//If the path does exist and is a directory:
-			if (strncmp(directory, strtok(rd.directories[i].dname, "/"), MAX_FILENAME) == 0) {
-				stbuf->st_mode = S_IFDIR | 0755;
-				stbuf->st_nlink = 2;
-				fclose(disk);
-				return res;
+			if (!strcmp((char *)(rd.directories[i].dname), directory)) {
+				dirstart = rd.directories[i].nStartBlock;
+				break;
 			}
+		}
+		//directory doesn't exist
+		if (!dirstart) {
+			fclose(disk);
+			return -ENOENT;
+		}
+		//No filename - path exists and is a directory
+		if (!strcmp(filename, "")) {
+			stbuf->st_mode = S_IFDIR | 0755;
+			stbuf->st_nlink = 2;
+			fclose(disk);
+			return res;
+		}
+		//Filename - path exists and we're looking for a file
+		else {
+			//read in dir
+			fseek(disk, dirstart * BLOCK_SIZE, SEEK_SET);
+			csc452_directory_entry dir;
+			fread(&dir, sizeof(csc452_directory_entry), 1, disk);
+			for (int i = 0; i < dir.nFiles; i++) {
+				if (!strcmp((char *)(dir.files[i].fname), filename)
+						&& !strcmp((char *)(dir.files[i].fext), extension)) {
+					stbuf->st_mode = S_IFREG | 0666;
+					stbuf->st_nlink = 2;
+					stbuf->st_size = dir.files[i].fsize;
+					fclose(disk);
+					return res;
+				}
+			}
+
 		}
 
 		//If the path does exist and is a file:
-		//stbuf->st_mode = S_IFREG | 0666;
-		//stbuf->st_nlink = 2;
-		//stbuf->st_size = file size
 		
 		//Else return that path doesn't exist
 		fclose(disk);
@@ -273,7 +313,7 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	unsigned long allocLength = 0;
 	int *allocData = NULL;
 	allocData = readAllocationData(disk, &allocLength);
-	long startBlk = 0;
+	long startBlk = 1;
 	while (testBit(allocData, startBlk))
 		startBlk++;
 
@@ -312,7 +352,59 @@ static int csc452_mknod(const char *path, mode_t mode, dev_t dev)
 	(void) path;
 	(void) mode;
     (void) dev;
-	
+	printf("*** called mknod\n");
+
+	//break path into dir/fn/ext
+	char directory[MAX_FILENAME+1] = "\0";
+	char filename[MAX_FILENAME+1] = "\0";
+	char extension[MAX_EXTENSION+1] = "\0";
+	sscanf(path, "/%[^/]/%[^.].%s", directory, filename, extension);
+	printf("*** dir: %s\n*** fn: %s\n*** ext: %s\n", directory, filename, extension);
+	if (strlen(filename) > MAX_FILENAME + 1 || strlen(extension) > MAX_EXTENSION + 1)
+		return -ENAMETOOLONG;
+
+	if (strcmp(directory, "") == 0)
+		return -EPERM;
+
+	csc452_root_directory rd;
+	FILE *disk = fopen(diskpath, "r+b");
+	if (!disk)
+		return -EFAULT;
+	fread(&rd, sizeof(csc452_root_directory), 1, disk);
+
+	//check that directory exists and load it
+	long dirstart = 0;
+	int i = 0;
+	for (; i < rd.nDirectories; i++) {
+		if (!strcmp((char *)(rd.directories[i].dname), directory)) {
+			dirstart = rd.directories[i].nStartBlock;
+			break;
+		}
+	}
+	//directory doesn't exist
+	if (!dirstart) {
+		fclose(disk);
+		return -ENOENT;
+	}
+
+	//read in dir
+	fseek(disk, dirstart * BLOCK_SIZE, SEEK_SET);
+	csc452_directory_entry dir;
+	fread(&dir, sizeof(csc452_directory_entry), 1, disk);
+	//update dir
+	//TODO: check that filename doesn't already exist in directory
+	strcpy(dir.files[dir.nFiles].fname, filename);
+	strcpy(dir.files[dir.nFiles].fext, extension);
+	dir.files[dir.nFiles].fsize = 0;
+	//TODO: set start block using free space tracking
+	dir.files[dir.nFiles].nStartBlock = 50 * i + 50 * dir.nFiles;
+	dir.nFiles++;
+
+	//write dir back
+	fseek(disk, dirstart * BLOCK_SIZE, SEEK_SET);
+	fwrite(&dir, sizeof(csc452_directory_entry), 1, disk);
+
+	fclose(disk);
 	return 0;
 }
 
