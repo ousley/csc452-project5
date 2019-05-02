@@ -164,10 +164,10 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 {
 	int res = 0;
 
-	//stbuf->st_uid = getuid();
-	//stbuf->st_gid = getgid();
-	//stbuf->st_atime = time(NULL);
-	//stbuf->st_mtime = time(NULL);
+	stbuf->st_uid = getuid();
+	stbuf->st_gid = getgid();
+	stbuf->st_atime = time(NULL);
+	stbuf->st_mtime = time(NULL);
 
 	if (strcmp(path, "/") == 0) {
 		stbuf->st_mode = S_IFDIR | 0755;
@@ -223,8 +223,6 @@ static int csc452_getattr(const char *path, struct stat *stbuf)
 
 		}
 
-		//If the path does exist and is a file:
-		
 		//Else return that path doesn't exist
 		fclose(disk);
 		res = -ENOENT;
@@ -251,14 +249,23 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	if (!disk)
 		return -EFAULT;
 	fread(&rd, sizeof(csc452_root_directory), 1, disk);
-	fclose(disk);
 
 	//A directory holds two entries, one that represents itself (.) 
 	//and one that represents the directory above us (..)
 	if (strcmp(path, "/") != 0) {
-		filler(buf, ".", NULL,0);
-		filler(buf, "..", NULL, 0);
-		//TODO: list files in subdirectories
+		for (int i = 0; i < rd.nDirectories; i++) {
+			if (!strcmp((char *)(rd.directories[i].dname), strtok((char *)path, "/"))) {
+				fseek(disk, rd.directories[i].nStartBlock, SEEK_SET);
+				csc452_directory_entry dir;
+				fread(&dir, sizeof(csc452_directory_entry), 1, disk);
+				filler(buf, ".", NULL,0);
+				filler(buf, "..", NULL, 0);
+				for (int j = 0; j < dir.nFiles; j++)
+					filler(buf, dir.files[j].fname, NULL, 0);
+				fclose(disk);
+				return 0;
+			}
+		}
 	}
 	else {
 		filler(buf, ".", NULL,0);
@@ -267,13 +274,14 @@ static int csc452_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		//disregard last two params because we don't care about file attributes
 		//and we're not doing weird things with string offsets(?)
 		for (int i = 0; i < rd.nDirectories; i++) {
-			//FIXME
-			//char *dirname = strtok(rd.directories[i].dname, "/");
 			filler(buf, rd.directories[i].dname, NULL, 0);
 		}
+		fclose(disk);
+		return 0;
 	}
 
-	return 0;
+	fclose(disk);
+	return -ENOENT;
 }
 
 /*
@@ -392,12 +400,25 @@ static int csc452_mknod(const char *path, mode_t mode, dev_t dev)
 	csc452_directory_entry dir;
 	fread(&dir, sizeof(csc452_directory_entry), 1, disk);
 	//update dir
-	//TODO: check that filename doesn't already exist in directory
+	//check that filename doesn't already exist in directory
+	for (int j = 0; j < dir.nFiles; j++) {
+		if (!strcmp((char *)(dir.files[i].fname), filename)
+				&& !strcmp((char *)(dir.files[i].fext), extension)) {
+			fclose(disk);
+			return -EEXIST;
+		}
+	}
 	strcpy(dir.files[dir.nFiles].fname, filename);
 	strcpy(dir.files[dir.nFiles].fext, extension);
 	dir.files[dir.nFiles].fsize = 0;
-	//TODO: set start block using free space tracking
-	dir.files[dir.nFiles].nStartBlock = 50 * i + 50 * dir.nFiles;
+	//read free space data and find an open block to put the file in
+	unsigned long allocLength = 0;
+	int *allocData = NULL;
+	allocData = readAllocationData(disk, &allocLength);
+	long startBlk = 1;
+	while (testBit(allocData, startBlk))
+		startBlk++;
+	dir.files[dir.nFiles].nStartBlock = startBlk;
 	dir.nFiles++;
 
 	//write dir back
