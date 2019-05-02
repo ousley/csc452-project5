@@ -81,7 +81,7 @@ typedef struct
 //read block allocation data from the end of the disk and load it into a linked
 //list starting at *head
 //return length of allocation bitmap
-unsigned long readAllocationData(FILE *disk, int *arr)
+int *readAllocationData(FILE *disk, int *allocLength)
 {
 	if (!disk)
 		return 0;
@@ -95,18 +95,20 @@ unsigned long readAllocationData(FILE *disk, int *arr)
 	fseek(disk, 0, SEEK_END);
 	diskSize = ftell(disk);
 	//get length of allocation bitmap (round up to nearest byte)
-	unsigned long allocLength = ((diskSize / BLOCK_SIZE) + 7) / 8;
+	*allocLength = ((diskSize / BLOCK_SIZE) + 7) / 8;
 	//get offset from end where allocation data starts (round up to nearest block)
-	unsigned int allocOffset = (allocLength + BLOCK_SIZE - 1)/BLOCK_SIZE;
+	unsigned int allocOffset = (*allocLength + BLOCK_SIZE - 1)/BLOCK_SIZE;
 
 	fseek(disk, allocOffset, SEEK_END);
-	arr = malloc(allocLength);
-	fread(arr, allocLength, 1, disk);
+	int *arr = malloc(*allocLength);
+	if (!arr)
+		exit(1);
+	fread(arr, *allocLength, 1, disk);
 
 	//go back to where we started
 	fsetpos(disk, &cur);
 
-	return allocLength;
+	return arr;
 }
 
 void writeAllocationData(FILE *disk, int *arr, unsigned long allocLength)
@@ -125,6 +127,18 @@ void writeAllocationData(FILE *disk, int *arr, unsigned long allocLength)
 
 	//go back to where we started
 	fsetpos(disk, &cur);
+}
+
+void setBit(int arr[], int k) {
+	arr[k/32] |= 1 << (k % 32);
+}
+
+void clearBit(int arr[], int k) {
+	arr[k/32] &= ~(1 << (k % 32));
+}
+
+int testBit(int *arr, int k) {
+	return ((arr[k/32] & (1 << (k % 32))) != 0);
 }
 
 /*
@@ -259,13 +273,20 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	//TODO: block start position should be arbitrary (they can be discontiguous)
 	//This will break as soon as at least one directory is removed - future
 	//directory entries will be written over old ones (use free space tracking)
-	long startBlk = rd.nDirectories + 1;
+	int allocLength = 0;
+	int *allocData = readAllocationData(disk, &allocLength);
+	long startBlk = 0;
+	while (testBit(allocData, startBlk))
+		startBlk++;
 
 	//create the directory
 	csc452_directory_entry dir_e = {
 		.nFiles = 0
 	};
 
+	setBit(allocData, startBlk);
+	writeAllocationData(disk, allocData, allocLength);
+	free(allocData);
 	//update directory list in root
 	strncpy(rd.directories[rd.nDirectories].dname, strtok((char *)path, "/"), MAX_FILENAME + 1);
 	rd.directories[rd.nDirectories].nStartBlock = startBlk;
