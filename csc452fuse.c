@@ -81,14 +81,13 @@ typedef struct
 //read block allocation data from the end of the disk and load it into a linked
 //list starting at *head
 //return length of allocation bitmap
-int *readAllocationData(FILE *disk, int *allocLength)
+int *readAllocationData(FILE *disk, unsigned long *allocLength)
 {
 	if (!disk)
 		return 0;
 
 	//save position in file
-	fpos_t cur;
-	fgetpos(disk, &cur);
+	long cur = ftell(disk);
 
 	//get disk size
 	unsigned long diskSize;
@@ -100,13 +99,13 @@ int *readAllocationData(FILE *disk, int *allocLength)
 	unsigned int allocOffset = (*allocLength + BLOCK_SIZE - 1)/BLOCK_SIZE;
 
 	fseek(disk, allocOffset, SEEK_END);
-	int *arr = malloc(*allocLength);
+	int *arr = calloc(1, *allocLength);
 	if (!arr)
 		exit(1);
 	fread(arr, *allocLength, 1, disk);
 
 	//go back to where we started
-	fsetpos(disk, &cur);
+	fseek(disk, cur, SEEK_SET);
 
 	return arr;
 }
@@ -116,8 +115,7 @@ void writeAllocationData(FILE *disk, int *arr, unsigned long allocLength)
 	if (!disk)
 		return;
 	//save position in file
-	fpos_t cur;
-	fgetpos(disk, &cur);
+	long cur = ftell(disk);
 
 	//get offset from end where allocation data will go (round up to nearest block)
 	unsigned int allocOffset = (allocLength + BLOCK_SIZE - 1)/BLOCK_SIZE;
@@ -126,14 +124,14 @@ void writeAllocationData(FILE *disk, int *arr, unsigned long allocLength)
 	fwrite(arr, allocLength, 1, disk);
 
 	//go back to where we started
-	fsetpos(disk, &cur);
+	fseek(disk, cur, SEEK_SET);
 }
 
-void setBit(int arr[], int k) {
+void setBit(int *arr, int k) {
 	arr[k/32] |= 1 << (k % 32);
 }
 
-void clearBit(int arr[], int k) {
+void clearBit(int *arr, int k) {
 	arr[k/32] &= ~(1 << (k % 32));
 }
 
@@ -270,11 +268,11 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	//ensure directory is in root (enforce two-level tree)
 	//TODO
 
-	//TODO: block start position should be arbitrary (they can be discontiguous)
-	//This will break as soon as at least one directory is removed - future
-	//directory entries will be written over old ones (use free space tracking)
-	int allocLength = 0;
-	int *allocData = readAllocationData(disk, &allocLength);
+	//read free space data and find an open block to put the directory in
+	//FIXME: writing bits to random arbitrary positions
+	unsigned long allocLength = 0;
+	int *allocData = NULL;
+	allocData = readAllocationData(disk, &allocLength);
 	long startBlk = 0;
 	while (testBit(allocData, startBlk))
 		startBlk++;
@@ -297,7 +295,6 @@ static int csc452_mkdir(const char *path, mode_t mode)
 	fwrite(&rd, sizeof(csc452_root_directory), 1, disk);
 	fseek(disk, startBlk * BLOCK_SIZE, SEEK_SET);
 	fwrite(&dir_e, sizeof(csc452_directory_entry), 1, disk);
-	//TODO: wite to free space tracking
 	fclose(disk);
 
 	return 0;
